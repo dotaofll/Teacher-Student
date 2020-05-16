@@ -14,16 +14,16 @@ Zero-Resource Neural Machine Translation_**
 
 Here is the paper :[arXiv:1705.00753]
 
-And if you don't know what the zero-shot mean please Google it and you will figure it out.
+And if you don’t know what zero-shot mean, please do a Google search and you will find the answer.
 
 # Usage
 
-If you want to translate some low resource language to target language and the bi-lingual corpus are always not available.
+If you want to translate some resource-poor languages into the target language, usually such a parallel corpus is difficult to build.
 
-So there is a commonly used method which is called pivot-based method.
-It means that if the source-to-target parallel corpus are not available but we can find the source-to-pivot language pairs and the pivot-to-target language pairs.
-Like this our problem becomes very easy to solve：train two NMT model separately for both source-to-pivot and pivot-to target language pairs.
-But this also brings new problems that is two fold,on the one hand is training time is too long,on the other hand is error propagation that is the training error from the former model will be the input of the latter one.
+So there is a commonly used method called pivot-based method to solve this situation.
+It means that if the source-to-target parallel corpus are not available but we can find the source-to-pivot language pairs and the pivot-to-target language pairs,and build a NMT model to solve the problem.
+In this way, our problem becomes very easy to solve: train two NMT models for the source-pivot and the pivot-target language pairs, respectively.
+Both of them also bring two new problems.The result is that the training time is too long,and error propagation that is,the training error from the former model will be the input of the latter one.
 
 Therefore,if we train a model once that all the issue will be vanished.
 
