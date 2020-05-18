@@ -9,8 +9,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from onmt.modules.sparse_activations import LogSparsemax
 from onmt.modules.sparse_losses import SparsemaxLoss
-from onmt.utils.loss import La
-
+from onmt.utils.loss import LabelSmoothingLoss
+from onmt.utils.loss import LossComputeBase
 
 def build_loss_compute(model, teacher_model, tgt_field, opt, train=True):
     """
@@ -50,7 +50,7 @@ def build_loss_compute(model, teacher_model, tgt_field, opt, train=True):
     # loss function of this kind is the sparsemax loss.
     use_raw_logits = isinstance(criterion, SparsemaxLoss)
     loss_gen = model.generator[0] if use_raw_logits else model.generator
-    
+    teacher_loss_gen = None
     if teacher_model is not None:
         teacher_loss_gen = teacher_model.generator[0] if use_raw_logits else teacher_model.generator
     
@@ -68,8 +68,9 @@ def build_loss_compute(model, teacher_model, tgt_field, opt, train=True):
     return compute
 
 
-class MyLoss(onmt.utils.loss.LossComputeBase):
-    def __call__(self, batch, output, attns, normalization=1.0, shard_size=0, trunc_start=0, trunc_size=None, teacher_outputs=None):
+class MyLoss(LossComputeBase):
+    def __call__(self, batch, output, attns, normalization=1.0, shard_size=0, trunc_start=0, trunc_size=None,
+                 teacher_outputs=None):
 
         if trunc_size is None:
             trunc_size = batch.tgt.size(0) - trunc_start
@@ -104,7 +105,10 @@ class NMTLossCompute(MyLoss):
         if teacher_outputs is not None:
             self.use_distillation_loss = True
             res_dict['teacher_outputs'] = teacher_outputs
-        res_dict['target'] = batch.tgt[range_[0] + 1: range_[1], :, 0]
+        tgt,tgt_lengths = batch.tgt if isinstance(batch.tgt,tuple) else (batch.tgt,None)
+        res_dict['target'] = tgt[range_[0] + 1: range_[1], :, 0]
+        if tgt_lengths is not None:
+            res_dict['target_lengths'] = tgt_lengths 
         res_dict["copy_attn"] = attns.get("copy")
         #res_dict["align"] = None if not copy_attn else batch.alignment[range_[0] + 1: range_[1]]
         res_dict["coverage"] = attns.get("coverage")

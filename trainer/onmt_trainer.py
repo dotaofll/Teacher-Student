@@ -29,8 +29,13 @@ class MyTrainer(Trainer):
 
         self.teacher_model = teacher_model
         self.n_gpu = n_gpu
-        super().__init__(model, train_loss, valid_loss, optim, trunc_size=trunc_size, shard_size=shard_size, norm_method=norm_method, accum_count=accum_count, accum_steps=accum_steps, n_gpu=n_gpu, gpu_rank=gpu_rank, gpu_verbose_level=gpu_verbose_level,
-                         report_manager=report_manager, with_align=with_align, model_saver=model_saver, average_decay=average_decay, average_every=average_every, model_dtype=model_dtype, earlystopper=earlystopper, dropout=dropout, dropout_steps=dropout_steps, source_noise=source_noise)
+        super().__init__(model, train_loss, valid_loss, optim, trunc_size=trunc_size, shard_size=shard_size,
+                         norm_method=norm_method, accum_count=accum_count, accum_steps=accum_steps, n_gpu=n_gpu,
+                         gpu_rank=gpu_rank, gpu_verbose_level=gpu_verbose_level,
+                         report_manager=report_manager, with_align=with_align, model_saver=model_saver,
+                         average_decay=average_decay, average_every=average_every, model_dtype=model_dtype,
+                         earlystopper=earlystopper, dropout=dropout, dropout_steps=dropout_steps,
+                         source_noise=source_noise)
 
     def train(self, train_iter, train_steps, sos_id, save_checkpoint_steps=5000, valid_iter=None, valid_steps=10000):
 
@@ -45,7 +50,7 @@ class MyTrainer(Trainer):
 
         self._start_report_manager(start_time=total_stats.start_time)
 
-        #self.sos_id = train_iter.fields['tgt'].fields[0][1].vocab.stoi['<s>']
+        # self.sos_id = train_iter.fields['tgt'].fields[0][1].vocab.stoi['<s>']
 
         for i, (batches, normalization) in enumerate(self._accum_batches(train_iter)):
             step = self.optim.training_step
@@ -53,7 +58,6 @@ class MyTrainer(Trainer):
             self._maybe_update_dropout(step)
 
             if self.gpu_verbose_level > 1:
-
                 logger.info('GPURANK %d: index: %d', self.gpu_rank, i)
             if self.gpu_verbose_level > 0:
                 logger.info("GpuRank %d: reduce_counter: %d \
@@ -97,8 +101,8 @@ class MyTrainer(Trainer):
                         break
 
             if (self.model_saver is not None
-                and (save_checkpoint_steps != 0
-                     and step % save_checkpoint_steps == 0)):
+                    and (save_checkpoint_steps != 0
+                         and step % save_checkpoint_steps == 0)):
                 self.model_saver.save(step, moving_average=self.moving_average)
 
             if train_steps > 0 and step >= train_steps:
@@ -108,13 +112,14 @@ class MyTrainer(Trainer):
             self.model_saver.save(step, moving_average=self.moving_average)
         return total_stats
 
-    def _gradient_accumulation(self, true_batches, normalization, total_stats, report_stats, sos_id, teacher_model=None):
+    def _gradient_accumulation(self, true_batches, normalization, total_stats, report_stats, sos_id,
+                               teacher_model=None):
 
         if self.accum_count > 1:
             self.optim.zero_grad()
 
         for k, batch in enumerate(true_batches):
-            target_size = batch.tgt.size(0)
+            target_size = batch.tgt[0].size(0)
             if self.trunc_size:
                 trunc_size = self.trunc_size
             else:
@@ -128,7 +133,11 @@ class MyTrainer(Trainer):
 
             # TODO reconstruct the field object to generate tgt_length
 
-            tgt_outer = batch.tgt
+            tgt_outer,tgt_lengths = batch.tgt if isinstance(batch.tgt,tuple) else (batch.tgt,None)
+
+            tgt_lengths,indices = torch.sort(tgt_lengths,descending=True)
+
+            del indices
 
             def generate_tgt(tgt):
                 batch_size = tgt.size(1)
@@ -139,11 +148,11 @@ class MyTrainer(Trainer):
                 return var
 
             bptt = False
-            for j in range(0, target_size-1, trunc_size):
+            for j in range(0, target_size - 1, trunc_size):
                 # 1. Create truncated target.
                 tgt = tgt_outer[j: j + trunc_size]
 
-                true_tgt = generate_tgt(tgt_outer[j:j+trunc_size])
+                true_tgt = generate_tgt(tgt_outer[j:j + trunc_size])
 
                 # 2. F-prop all but generator.
                 if self.accum_count == 1:
@@ -151,9 +160,10 @@ class MyTrainer(Trainer):
 
                 outputs, attns = self.model(src, tgt, src_lengths, bptt=bptt,
                                             with_align=self.with_align)
+                teacher_outputs = None
                 if teacher_model is not None:
                     teacher_outputs, _ = self.teacher_model(
-                        tgt, true_tgt, lengths=None, bptt=bptt, with_align=self.with_align)
+                        tgt, true_tgt, lengths=tgt_lengths, bptt=bptt, with_align=self.with_align)
 
                 bptt = True
 
@@ -210,6 +220,27 @@ class MyTrainer(Trainer):
                     grads, float(1))
             self.optim.step()
 
+    def _accum_batches(self, iterator):
+        batches = []
+        normalization = 0
+        self.accum_count = self._accum_count(self.optim.training_step)
+
+        for batch in iterator:
+            batches.append(batch)
+            if self.norm_method == "tokens":
+                tgt,tgt_lengths = batch.tgt if isinstance(batch.tgt,tuple) else (batch.tgt,None)
+                num_tokens = tgt.ne(self.train_loss.padding_idx).sum()
+                normalization += num_tokens.item()
+            else:
+                normalization += batch.batch_size
+            if len(batches) == self.accum_count:
+                yield batches, normalization
+                self.accum_count = self._accum_count(self.optim.training_step)
+                batches = []
+                normalization = 0
+        if batches:
+            yield batches, normalization
+
 
 def build_trainer(opt, device_id, model, teacher_model, fields, optim, model_saver=None):
     """
@@ -228,10 +259,21 @@ def build_trainer(opt, device_id, model, teacher_model, fields, optim, model_sav
 
     tgt_field = dict(fields)["tgt"].base_field
 
-    train_loss = build_loss_compute(
-        model, teacher_model, tgt_field, opt, train=True)
+    padding_idx = tgt_field.vocab.stoi[tgt_field.pad_token]
+    unk_idx = tgt_field.vocab.stoi[tgt_field.unk_token]
 
-    valid_loss = build_loss_compute(model, None, tgt_field, opt, train=True)
+    if opt.label_smoothing > 0:
+        criterion = LabelSmoothingLoss(
+            opt.label_smoothing, len(tgt_field.vocab), ignore_index=padding_idx
+        )
+
+    else:
+        criterion = nn.NLLLoss(ignore_index=padding_idx, reduction='sum')
+
+    teacher_loss_gen = teacher_model.generator if teacher_model is not None else None
+    train_loss = NMTLossCompute(model.generator, criterion, use_distillation_loss=False,
+                                teacher_generator=teacher_loss_gen)
+    valid_loss = NMTLossCompute(model.generator, criterion)
 
     trunc_size = opt.truncated_decoder  # Badly named...
     shard_size = 0
@@ -245,10 +287,12 @@ def build_trainer(opt, device_id, model, teacher_model, fields, optim, model_sav
     dropout_steps = opt.dropout_steps
     if device_id >= 0:
         gpu_rank = opt.gpu_ranks[device_id]
+        train_loss.to(torch.device('cuda'))
+        valid_loss.to(torch.device('cuda'))
     else:
         gpu_rank = 0
         n_gpu = 0
-        
+
     gpu_verbose_level = opt.gpu_verbose_level
     earlystopper = onmt.utils.EarlyStopping(
         opt.early_stopping, scorers=onmt.utils.scorers_from_opts(opt)) \

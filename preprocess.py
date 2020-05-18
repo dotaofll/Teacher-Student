@@ -3,6 +3,7 @@ import glob
 import gc
 import torch
 from collections import Counter, defaultdict
+from torchtext.data import Field,RawField,LabelField
 
 from onmt.utils.logging import init_logger, logger
 from onmt.utils.misc import split_corpus
@@ -12,10 +13,106 @@ from onmt.utils.parse import ArgumentParser
 from onmt.inputters.inputter import _build_fields_vocab,\
                                     _load_vocab, \
                                     old_style_vocab, \
-                                    load_old_vocab
+                                    load_old_vocab, \
+                                    make_src,make_tgt, \
+                                    AlignField
+
+from onmt.inputters.text_dataset import text_fields,TextMultiField
+from onmt.inputters.image_dataset import image_fields
+from onmt.inputters.audio_dataset import audio_fields
+from onmt.inputters.vec_dataset import vec_fields
+
 
 from functools import partial
 from multiprocessing import Pool
+
+def get_fields(
+    src_data_type,
+    n_src_feats,
+    n_tgt_feats,
+    pad='<blank>',
+    eos='</s>',
+    bos='<s>',
+    dynamic_dict=False,
+    with_align=False,
+    src_truncate=None,
+    tgt_truncate=None
+):
+    """
+    Args:
+        src_data_type: type of the source input. Options are [text|img|audio].
+        n_src_feats (int): the number of source features (not counting tokens)
+            to create a :class:`torchtext.data.Field` for. (If
+            ``src_data_type=="text"``, these fields are stored together
+            as a ``TextMultiField``).
+        n_tgt_feats (int): See above.
+        pad (str): Special pad symbol. Used on src and tgt side.
+        bos (str): Special beginning of sequence symbol. Only relevant
+            for tgt.
+        eos (str): Special end of sequence symbol. Only relevant
+            for tgt.
+        dynamic_dict (bool): Whether or not to include source map and
+            alignment fields.
+        with_align (bool): Whether or not to include word align.
+        src_truncate: Cut off src sequences beyond this (passed to
+            ``src_data_type``'s data reader - see there for more details).
+        tgt_truncate: Cut off tgt sequences beyond this (passed to
+            :class:`TextDataReader` - see there for more details).
+    Returns:
+        A dict mapping names to fields. These names need to match
+        the dataset example attributes.
+    """
+
+    assert src_data_type in ['text', 'img', 'audio', 'vec'], \
+        "Data type not implemented"
+    assert not dynamic_dict or src_data_type == 'text', \
+        'it is not possible to use dynamic_dict with non-text input'
+    fields = {}
+
+    fields_getters = {"text": text_fields,
+                      "img": image_fields,
+                      "audio": audio_fields,
+                      "vec": vec_fields}
+
+    src_field_kwargs = {"n_feats": n_src_feats,
+                        "include_lengths": True,
+                        "pad": pad, "bos": None, "eos": None,
+                        "truncate": src_truncate,
+                        "base_name": "src"}
+    fields["src"] = fields_getters[src_data_type](**src_field_kwargs)
+
+    tgt_field_kwargs = {"n_feats": n_tgt_feats,
+                        "include_lengths": True,
+                        "pad": pad, "bos": bos, "eos": eos,
+                        "truncate": tgt_truncate,
+                        "base_name": "tgt"}
+    fields["tgt"] = fields_getters["text"](**tgt_field_kwargs)
+
+    indices = Field(use_vocab=False, dtype=torch.long, sequential=False)
+    fields["indices"] = indices
+
+    corpus_ids = Field(use_vocab=True, sequential=False)
+    fields["corpus_id"] = corpus_ids
+
+    if dynamic_dict:
+        src_map = Field(
+            use_vocab=False, dtype=torch.float,
+            postprocessing=make_src, sequential=False)
+        fields["src_map"] = src_map
+
+        src_ex_vocab = RawField()
+        fields["src_ex_vocab"] = src_ex_vocab
+
+        align = Field(
+            use_vocab=False, dtype=torch.long,
+            postprocessing=make_tgt, sequential=False)
+        fields["alignment"] = align
+
+    if with_align:
+        word_align = AlignField()
+        fields["align"] = word_align
+
+    return fields
 
 
 def check_existing_pt_files(opt, corpus_type, ids, existing_fields):
@@ -268,7 +365,7 @@ def preprocess(opt):
     logger.info(" * number of target features: %d." % tgt_nfeats)
 
     logger.info("Building `Fields` object...")
-    fields = inputters.get_fields(
+    fields = get_fields(
         opt.data_type,
         src_nfeats,
         tgt_nfeats,
