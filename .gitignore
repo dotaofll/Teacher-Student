@@ -1,0 +1,11 @@
+ckpoint/
+teacher_ckpoint/
+old_version/
+current_version/
+__pycache__/
+train_stu/
+train/
+*.out
+*.sh
+*.log
+config_tea
