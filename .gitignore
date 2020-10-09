@@ -3,6 +3,8 @@ teacher_ckpoint/
 old_version/
 current_version/
 __pycache__/
+data/
+.vscode/
 train_stu/
 train/
 *.out
