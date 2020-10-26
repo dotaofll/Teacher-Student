@@ -12,7 +12,7 @@ from onmt.modules.sparse_losses import SparsemaxLoss
 from onmt.utils.loss import LossComputeBase
 
 
-def build_loss_compute(model, tgt_field, opt, train=True,teacher_model=None):
+def build_loss_compute(model, tgt_field, opt, train=True, teacher_model=None):
     """
     Returns a LossCompute subclass which wraps around an nn.Module subclass
     (such as nn.NLLLoss) which defines the loss criterion. The LossCompute
@@ -147,16 +147,18 @@ class NMTLossCompute(MyLoss):
         target_data = target.data.clone()
 
         loss = self._criterion(scores, target)
-        
+
         if self.use_distillation_loss:
             weight_teacher_loss = 0.7
             teacher_outputs = kwargs['teacher_outputs']
             scores_teacher = self.teacher_generator(
                 self._bottle(teacher_outputs))
             prob_teacher = scores_teacher.exp().detach()
+            prob_scores = scores.exp().detach()
             scores, prob_teacher = self._pad(scores, prob_teacher)
             # Here we use a temperature of 1..
-            loss_distilled = self._KLDiveLoss(scores,prob_teacher)
+            loss_distilled = self._Jensen_Shannon_divergence(
+                prob_scores , prob_teacher)
             loss = (1-weight_teacher_loss)*loss + \
                 weight_teacher_loss*loss_distilled
         loss_data = loss.data.clone()
@@ -165,15 +167,16 @@ class NMTLossCompute(MyLoss):
         return loss, stats
 
     def _Jensen_Shannon_divergence(self, score: torch.Tensor,
-                                  target: torch.Tensor):
-        log_mean_output = ((score + target) / 2).log()
-        return (self._KLDiveLoss(log_mean_output, score) +
-                self._KLDiveLoss(log_mean_output, target)) / 2
+                                   target: torch.Tensor):
+        mean_output = 0.5 * (score + target)
+        src = 0.5 * self._KLDiveLoss(score,mean_output)
+        tgt = 0.5 * self._KLDiveLoss(target,mean_output)
+        return src + tgt
 
     def _pad(self, scores, teacher_scores):
 
         if scores.size(1) > teacher_scores.size(1):
-            # teacher_scores must be padded to the same size to scores
+            # teacher_scores must be padded to the same size as scores
             pad_size = scores.size(1) - teacher_scores.size(1)
             if pad_size % 2 == 0:
                 pad_range = (pad_size // 2, pad_size // 2)
@@ -265,6 +268,7 @@ class LabelSmoothingLoss(nn.Module):
     KL-divergence between q_{smoothed ground truth prob.}(w)
     and p_{prob. computed by model}(w) is minimized.
     """
+
     def __init__(self, label_smoothing, tgt_vocab_size, ignore_index=-100):
         assert 0.0 < label_smoothing <= 1.0
         self.ignore_index = ignore_index
