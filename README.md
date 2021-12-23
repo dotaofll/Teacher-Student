@@ -1,74 +1,28 @@
 Title         : Teacher-Student FrameWork for Zero-Shot Machine Translation
 Author        : xxlucas
-Logo          : True
-
-[TITLE]
 
 # Introduction 
 
 TS-FrameWork is machine translation framework which is based on OpenNMT-py.
 
-The main idea about how to implement is coming from **_A Teacher-Student Framework for
-Zero-Resource Neural Machine Translation_**
-
+The main idea about how to implement is coming from **_A Teacher-Student Framework for Zero-Resource Neural Machine Translation_**
 
 Here is the paper :[arXiv:1705.00753]
 
-And if you don’t know what zero-shot mean, please do a Google search and you will find the answer.
+Although, NMT has achieved state-of-the-art performance on many translation tasks.However, NMT is also plagued by data sparseness.
+\cite{zoph2016transfer} indicate that NMT obtains much worse translation quality than a statistical machine translation system.
+In response to this problem, it is necessary to construct an effective NMT to cope with the situation of low resource languages.
 
-# Usage
+As a result,Many scholars are working hard to explore new methods of translating languages, when faced with insufficient or even no parallel corpus.
+\cite{firat2016multi} present a multi-way,multilingual model with shared attention to achieve zero-resource language pair.Another direction is to develop an universal encoder-decoder architecture.
+The simplest and most efficient implementation method is to use target-forcing technique,which is to pretend to the source sentence a tag specifying the target language,both training and testing time(\cite{johnson2017google},\cite{ha2016toward}).
+Since the transformer model was proposed, many translation tasks have replaced rnn-based NMT with transformer NMT.
+Another direction is to achieve an source-to-target NMT without parallel corpus via a pivot.\cite{cheng2016neural} proposed a method for zero-resource NMT.
 
-If you want to translate some resource-poor languages into the target language, usually such a parallel corpus is difficult to build.
+Although these approaches prove to be effective,but pivot-based approaches usually need to divide the decoding process into two steps,which is not only more computationally expensive, but also potentially suffers from the error propagation problem(\cite{zhu2013improving}).
+\cite{chen2017teacher} proposed an NMT based on knowledge distillation and pre-training.They called source-to-pivot NMT "student" and pivot-to-target NMT "teacher" and they pre-train the "teacher" model and use "teacher" model to guide the learning process of the student model on a source-pivot parallel corpus.
+Compared with pivot-based approaches(\cite{cheng2016neural}),their method directly estimates the posterior probability of the source language to the target language.Therefore this strategy not only improves efficiency but also avoids error propagation in decoding.
 
-So there is a commonly used method called pivot-based method to solve this situation.
-It means that if the source-to-target parallel corpus are not available but we can find the source-to-pivot language pairs and the pivot-to-target language pairs,and build a NMT model to solve the problem.
-In this way, our problem becomes very easy to solve: train two NMT models for the source-pivot and the pivot-target language pairs, respectively.
-Both of them also bring two new problems.The result is that the training time is too long,and error propagation that is,the training error from the former model will be the input of the latter one.
-
-Therefore,if we train a model once that all the issue will be vanished.
-
-Assume that the source-to-pivot and pivot-to-target languages are all available.
-
-**Step 0. preprocess the raw data **
-
-``` python
-mkdir data
-cd data
-
-mkdir teacher
-mkdir student
-
-python ../preprocess.py --train_src path_to_pivot --train_tgt path_to_target \
-                  --save_data data/teacher
-python ../preprocess.py --train_src path_to_source --train_tgt path_to_pivot \
-                  --save_data data/student
-```
-**Step 1. train teacher model on pivot-to-target **
-
-``` javascript
-# the GNMT style teacher model
-python train.py -data data/teacher -save_model ./model \
-        -layers 8 -rnn_size 1024 -rnn_type GRU \
-        -encoder_type brnn -decoder_type rnn \
-        -train_steps 200000  -max_generator_batches 2 -dropout 0.1 \
-        -batch_size 128 -batch_type sents -normalization sents  -accum_count 2 \
-        -optim adam -adam_beta2 0.998 -decay_method noam -warmup_steps 8000 -learning_rate 1e-3 \
-        -max_grad_norm 5 -param_init 0  -param_init_glorot \
-        -valid_steps 10000 -save_checkpoint_steps 10000 \
-        -world_size 1 -gpu_ranks 0
-```
-**Step 2. train student model on source-to-pivot **
-
-``` javascript
-# the transformer student model
-python train.py -data data/student/ -save_model student \
--layers 6 -rnn_size 512 -word_vec_size 512 -transformer_ff 2048 -heads 8 \
--encoder_type transformer -decoder_type transformer -position_encoding \
--train_steps 100000 -max_generator_batches 2 -dropout 0.1 \
--batch_size 4096 -batch_type tokens -normalization tokens -accum_count 2 \
--optim adam -adam_beta2 0.998 -decay_method noam -warmup_steps 8000 -learning_rate 2 \
--label_smoothing 0.1 -save_checkpoint_steps 10000 \
--world_size 1 -gpu_ranks 0 --teacher_model_path model_step_200000.pt
-```
-
-You can evaluate the model with OpenNMT-py's api.
+In this work,we approach low-resource machine translation with so-called pivot-based NMT(\cite{cheng2016neural},\cite{chen2017teacher}).The Transformer approach delivers the best performing multilingual models,with a larger gain over
+corresponding bilingual models than observed with RNNs and it delivers the best quality in all considered zero-shot condition and translation directions(\cite{lakew2018comparison}).
+Our motivation is based on the above two points and the method of \cite{chen2017teacher} .So our approach is a pivot-based transformer NMT.Not only reduces the calculation cost, but also avoids the second propagation of error. More importantly, the transformer NMT has been proven to perform better than rnn-based NMT.
